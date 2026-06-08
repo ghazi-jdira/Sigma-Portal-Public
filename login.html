@@ -81,9 +81,14 @@
   </div>
 
 <script>
-  /* ---------- config ---------- */
-  var USERS_URL = '../Sigma-Portal-Private/users.json';   /* credentials live in the private folder */
-  var ROOT      = '../Sigma-Portal-Private/';             /* report/template paths are relative to the private folder */
+  /* ---------- config ----------
+     BASE = the private report service (the Render URL). Everything the portal
+     reads (users.json, /reports) and links to (reports, template) lives there.
+     Leave BASE = '' only if the login is served from the SAME origin as the
+     reports (e.g. an all-in-one local server). */
+  var BASE      = 'https://sigma-portal-private-2.onrender.com';
+  var USERS_URL = BASE + '/users.json';   /* credentials file on the private service */
+  var ROOT      = BASE + '/';             /* report/template links resolve against this */
 
   /* ---------- crypto helpers ---------- */
   async function sha256hex(str){
@@ -112,12 +117,12 @@
   async function listReports(cfg, rec){
     try{
       if(rec.role === 'admin'){
-        var r = await fetch('/reports', {cache:'no-store'});
+        var r = await fetch(BASE + '/reports', {cache:'no-store'});
         if(r.ok){ var j = await r.json(); if(j && j.clients){
           var all = []; Object.keys(j.clients).forEach(function(k){ all = all.concat(j.clients[k]); }); return all; } }
       } else {
         var folder = rec.folder || rec.username;
-        var r2 = await fetch('/reports?client=' + encodeURIComponent(folder), {cache:'no-store'});
+        var r2 = await fetch(BASE + '/reports?client=' + encodeURIComponent(folder), {cache:'no-store'});
         if(r2.ok){ var j2 = await r2.json(); if(j2 && j2.files) return j2.files; }
       }
     }catch(e){ /* no server -> fall back to the static list below */ }
