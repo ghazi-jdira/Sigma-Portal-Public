@@ -35,7 +35,14 @@
     background:#f7f9fe;transition:.12s;}
   a.report:hover{background:#eef3fd;border-color:var(--navy);}
   a.report .ic{color:var(--yellow);font-weight:700;}
+  a.report .rname{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  a.report .rdate{flex:none;color:#8a93a6;font-size:12px;font-weight:600;margin-left:8px;}
   a.report.tmpl{background:#fffdf2;border-color:#f0e2a8;}
+  .report-row{display:flex;align-items:center;gap:6px;}
+  .report-row a.report{flex:1;}
+  .del-btn{flex:none;border:1px solid #f0c9c9;background:#fdf2f2;color:#a12222;border-radius:7px;
+    padding:9px 11px;font-size:14px;line-height:1;cursor:pointer;}
+  .del-btn:hover{background:#f7dede;border-color:#d98a8a;}
   .none{color:#888;font-size:13px;font-style:italic;margin:6px 0;}
   button.out{background:#eee;border:1px solid #ccc;border-radius:6px;padding:8px 14px;
     font-size:13px;font-weight:600;cursor:pointer;color:#444;margin-top:16px;}
@@ -89,6 +96,10 @@
   var BASE      = 'https://sigma-portal-private-2.onrender.com';
   var USERS_URL = BASE + '/users.json';   /* credentials file on the private service */
   var ROOT      = BASE + '/';             /* report/template links resolve against this */
+  /* gate token appended to report links; the report's guard checks it and
+     redirects bare/unauthorised URLs back to this login page. Must match the
+     TOKEN constant in each report's access-gate script. */
+  var GATE      = 'SIG-PORTAL-GATE';
 
   /* ---------- crypto helpers ---------- */
   async function sha256hex(str){
@@ -101,14 +112,50 @@
   }
 
   /* ---------- helpers ---------- */
+  var REPORT_DATES = {};   /* path -> "YYYY-MM-DD" last-updated, filled from /reports */
   function fileName(path){ return path.split('/').pop(); }
   function reportLink(path, isTemplate){
     var a = document.createElement('a');
     a.className = 'report' + (isTemplate ? ' tmpl' : '');
-    a.href = ROOT + path.split('/').map(encodeURIComponent).join('/');
+    a.href = ROOT + path.split('/').map(encodeURIComponent).join('/') + '#k=' + encodeURIComponent(GATE);
     a.target = '_blank'; a.rel = 'noopener';
-    a.innerHTML = '<span class="ic">' + (isTemplate ? '☆' : '▸') + '</span>' + fileName(path);
+    var d = REPORT_DATES[path];
+    a.innerHTML = '<span class="ic">' + (isTemplate ? '☆' : '▸') + '</span>'
+      + '<span class="rname">' + fileName(path) + '</span>'
+      + (d ? '<span class="rdate" title="Last updated">' + d + '</span>' : '');
     return a;
+  }
+  /* a report row = the link, plus a delete button for administrators */
+  function reportRow(path, canDelete){
+    var row = document.createElement('div'); row.className = 'report-row';
+    row.appendChild(reportLink(path, false));
+    if(canDelete){
+      var del = document.createElement('button');
+      del.className = 'del-btn'; del.type = 'button';
+      del.title = 'Delete this report'; del.textContent = '🗑';
+      del.addEventListener('click', function(){ confirmDelete(path); });
+      row.appendChild(del);
+    }
+    return row;
+  }
+  var PORTAL_CFG = null, PORTAL_REC = null;   /* remembered so we can refresh after a delete */
+  async function confirmDelete(path){
+    if(!window.confirm('Delete this report permanently?\n\n' + path + '\n\nThis cannot be undone.')) return;
+    var i = path.indexOf('/');
+    var client = i < 0 ? '' : path.slice(0, i);
+    var file   = i < 0 ? path : path.slice(i + 1);
+    try{
+      var res = await fetch(BASE + '/delete', {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({client: client, file: file})
+      });
+      var j = {}; try{ j = await res.json(); }catch(e){}
+      if(res.ok && j.ok){
+        if(PORTAL_CFG && PORTAL_REC) showPortal(PORTAL_CFG, PORTAL_REC);   /* refresh the list */
+      } else {
+        alert('Could not delete: ' + (j.error || j.githubError || ('HTTP ' + res.status)));
+      }
+    }catch(e){ alert('Could not delete: ' + e); }
   }
 
   /* live list of the reports this user may see — read straight from the
@@ -119,11 +166,12 @@
       if(rec.role === 'admin'){
         var r = await fetch(BASE + '/reports', {cache:'no-store'});
         if(r.ok){ var j = await r.json(); if(j && j.clients){
+          if(j.dates) REPORT_DATES = j.dates;
           var all = []; Object.keys(j.clients).forEach(function(k){ all = all.concat(j.clients[k]); }); return all; } }
       } else {
         var folder = rec.folder || rec.username;
         var r2 = await fetch(BASE + '/reports?client=' + encodeURIComponent(folder), {cache:'no-store'});
-        if(r2.ok){ var j2 = await r2.json(); if(j2 && j2.files) return j2.files; }
+        if(r2.ok){ var j2 = await r2.json(); if(j2 && j2.files){ if(j2.dates) REPORT_DATES = j2.dates; return j2.files; } }
       }
     }catch(e){ /* no server -> fall back to the static list below */ }
     if(rec.role === 'admin'){
@@ -136,6 +184,7 @@
 
   /* ---------- render portal for the signed-in user ---------- */
   async function showPortal(cfg, rec){
+    PORTAL_CFG = cfg; PORTAL_REC = rec;
     document.getElementById('signin').style.display = 'none';
     document.getElementById('portal').style.display = 'block';
     document.getElementById('who-name').textContent = rec.username + (rec.role==='admin' ? '  (administrator)' : '');
@@ -144,11 +193,12 @@
     list.innerHTML = '';
 
     var reports = await listReports(cfg, rec);
+    var canDelete = (rec.role === 'admin');
 
     var g1 = document.createElement('div'); g1.className = 'group';
     g1.innerHTML = '<h2>Audit Reports</h2>';
     if(reports && reports.length){
-      reports.sort().forEach(function(r){ g1.appendChild(reportLink(r, false)); });
+      reports.sort().forEach(function(r){ g1.appendChild(reportRow(r, canDelete)); });
     } else {
       var n = document.createElement('div'); n.className='none';
       n.textContent = 'No reports are assigned to your account yet.';
