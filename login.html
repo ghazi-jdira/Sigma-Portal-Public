@@ -117,7 +117,8 @@
   function reportLink(path, isTemplate){
     var a = document.createElement('a');
     a.className = 'report' + (isTemplate ? ' tmpl' : '');
-    a.href = ROOT + path.split('/').map(encodeURIComponent).join('/') + '#k=' + encodeURIComponent(GATE);
+    a.href = ROOT + path.split('/').map(encodeURIComponent).join('/') + '#k=' + encodeURIComponent(GATE)
+      + (PORTAL_REC ? '&u=' + encodeURIComponent(PORTAL_REC.username || '') + '&r=' + encodeURIComponent(PORTAL_REC.role || '') : '');
     a.target = '_blank'; a.rel = 'noopener';
     var d = REPORT_DATES[path];
     a.innerHTML = '<span class="ic">' + (isTemplate ? '☆' : '▸') + '</span>'
